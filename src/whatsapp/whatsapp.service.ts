@@ -1,4 +1,5 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -16,6 +17,8 @@ export class WhatsappService implements OnModuleInit {
   private readonly logFullMessageJson = false;
   // Toggle this flag to false if you don't want to log the display name
   private readonly logDisplayName = true;
+
+  constructor(private eventEmitter: EventEmitter2) {}
 
   async onModuleInit() {
     await this.connectToWhatsApp();
@@ -90,15 +93,26 @@ export class WhatsappService implements OnModuleInit {
     this.sock.ev.on('messages.upsert', (m) => {
       if (m.type === 'notify') {
         for (const msg of m.messages) {
-          // Log incoming messages only
-          if (!msg.key.fromMe && msg.message) {
-            const jid = msg.key.remoteJid || '';
+          const jid = msg.key.remoteJid || '';
+
+          if (msg.key.fromMe) {
+            // It's a reply from us
+            this.eventEmitter.emit('message.replied', { jid });
+          } else if (!msg.key.fromMe && msg.message) {
+            // Incoming message
             const isGroup = jid.endsWith('@g.us');
             const chatType = isGroup ? 'Group' : 'Private';
             const senderName = msg.pushName || 'Unknown';
             const displayString = this.logDisplayName
               ? `${senderName} (${jid})`
               : `${jid}`;
+
+            // Emit the event to the SLA service
+            this.eventEmitter.emit('message.received', {
+              jid,
+              senderName,
+              chatType,
+            });
 
             if (this.logFullMessageJson) {
               this.logger.log(
