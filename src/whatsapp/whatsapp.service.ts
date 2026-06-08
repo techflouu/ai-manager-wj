@@ -104,7 +104,11 @@ export class WhatsappService implements OnModuleInit {
               const isGroup = jid.endsWith('@g.us');
               const chatType = isGroup ? 'Group' : 'Private';
               const senderName = msg.pushName || 'Unknown';
-              const participant = isGroup ? msg.key.participant || jid : jid;
+              // Prefer participantAlt if it exists (contains real phone number instead of @lid)
+              const participantAlt = msg.key.participantAlt;
+              const participant = isGroup
+                ? participantAlt || msg.key.participant || jid
+                : jid;
               const displayString = this.logDisplayName
                 ? `${senderName} (${participant})`
                 : `${participant}`;
@@ -133,7 +137,7 @@ export class WhatsappService implements OnModuleInit {
 
               if (this.logFullMessageJson) {
                 this.logger.log(
-                  `Received [${chatType}] message from ${displayString}: ${JSON.stringify(msg.message)}`,
+                  `Received [${chatType}] message from ${displayString}: ${JSON.stringify(msg, null, 2)}`,
                 );
               } else {
                 // Extract the actual text content from the message object

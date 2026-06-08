@@ -191,7 +191,8 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    const participantPhone = payload.participant.split('@')[0];
+    const participantPhone = payload.participant.split('@')[0].split(':')[0];
+
     if (this.hrPhones.has(participantPhone)) {
       this.logger.log(
         `HR member ${participantPhone} replied in ${payload.jid}, stopping SLA timer.`,
