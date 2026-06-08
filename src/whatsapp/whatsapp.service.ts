@@ -14,6 +14,8 @@ export class WhatsappService implements OnModuleInit {
   private sock: ReturnType<typeof makeWASocket>;
   // Toggle this flag to true if you want to see the full JSON of the incoming message
   private readonly logFullMessageJson = false;
+  // Toggle this flag to false if you don't want to log the display name
+  private readonly logDisplayName = true;
 
   async onModuleInit() {
     await this.connectToWhatsApp();
@@ -93,10 +95,14 @@ export class WhatsappService implements OnModuleInit {
             const jid = msg.key.remoteJid || '';
             const isGroup = jid.endsWith('@g.us');
             const chatType = isGroup ? 'Group' : 'Private';
+            const senderName = msg.pushName || 'Unknown';
+            const displayString = this.logDisplayName
+              ? `${senderName} (${jid})`
+              : `${jid}`;
 
             if (this.logFullMessageJson) {
               this.logger.log(
-                `Received [${chatType}] message from ${jid}: ${JSON.stringify(msg.message)}`,
+                `Received [${chatType}] message from ${displayString}: ${JSON.stringify(msg.message)}`,
               );
             } else {
               // Extract the actual text content from the message object
@@ -108,7 +114,7 @@ export class WhatsappService implements OnModuleInit {
                 '[Non-text message]';
 
               this.logger.log(
-                `Received [${chatType}] message from ${jid}: ${textMessage}`,
+                `Received [${chatType}] message from ${displayString}: ${textMessage}`,
               );
             }
           }
