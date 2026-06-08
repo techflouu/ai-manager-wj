@@ -17,6 +17,7 @@ export class WhatsappService implements OnModuleInit {
   private readonly logFullMessageJson = false;
   // Toggle this flag to false if you don't want to log the display name
   private readonly logDisplayName = true;
+  public latestQr: string | null = null;
 
   constructor(private eventEmitter: EventEmitter2) {}
 
@@ -35,6 +36,10 @@ export class WhatsappService implements OnModuleInit {
       this.logger.log('Logged out. You can now scan a new QR code.');
     }
     return { message: 'Disconnected and logged out successfully' };
+  }
+
+  getLatestQr(): string | null {
+    return this.latestQr;
   }
 
   async getGroupParticipants(
@@ -69,6 +74,7 @@ export class WhatsappService implements OnModuleInit {
       if (qr) {
         qrcode.generate(qr, { small: true });
         this.logger.log('Please scan the QR code above to login to WhatsApp.');
+        this.latestQr = qr;
       }
 
       if (connection === 'close') {
@@ -99,6 +105,7 @@ export class WhatsappService implements OnModuleInit {
         }
       } else if (connection === 'open') {
         this.logger.log('WhatsApp connected successfully!');
+        this.latestQr = null;
       }
     });
 
