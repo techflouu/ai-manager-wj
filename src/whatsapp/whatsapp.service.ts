@@ -98,7 +98,24 @@ export class WhatsappService implements OnModuleInit {
 
             if (msg.key.fromMe) {
               // It's a reply from us
-              this.eventEmitter.emit('message.replied', { jid });
+              const isGroup = jid.endsWith('@g.us');
+              let chatName = '';
+              if (isGroup) {
+                try {
+                  const groupMetadata = await this.sock.groupMetadata(jid);
+                  chatName = groupMetadata.subject;
+                } catch (err) {
+                  this.logger.warn(
+                    `Could not fetch group metadata for ${jid}`,
+                    err,
+                  );
+                }
+              }
+              this.eventEmitter.emit('message.replied', {
+                jid,
+                isGroup,
+                chatName,
+              });
             } else if (!msg.key.fromMe && msg.message) {
               // Incoming message
               const isGroup = jid.endsWith('@g.us');

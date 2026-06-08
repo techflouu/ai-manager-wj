@@ -12,6 +12,12 @@ export interface PendingMessage {
   notified: boolean;
 }
 
+export interface TrackedGroup {
+  jid: string;
+  chatName: string;
+  lastHrMessageAtISO: string | null;
+}
+
 @Injectable()
 export class D1Service implements OnModuleInit {
   private readonly logger = new Logger(D1Service.name);
@@ -93,6 +99,16 @@ export class D1Service implements OnModuleInit {
     `;
     await this.query(sqlHrPhones);
     this.logger.log('Ensured hr_phones table exists in D1.');
+
+    const sqlTrackedGroups = `
+      CREATE TABLE IF NOT EXISTS tracked_groups (
+        jid TEXT PRIMARY KEY,
+        chatName TEXT,
+        lastHrMessageAtISO TEXT
+      );
+    `;
+    await this.query(sqlTrackedGroups);
+    this.logger.log('Ensured tracked_groups table exists in D1.');
   }
 
   async getAllPendingMessages(): Promise<PendingMessage[]> {
@@ -175,5 +191,40 @@ export class D1Service implements OnModuleInit {
 
   async removeHrPhone(phone: string) {
     await this.query(`DELETE FROM hr_phones WHERE phone = ?`, [phone]);
+  }
+
+  async getAllTrackedGroups(): Promise<TrackedGroup[]> {
+    const rows = await this.query(`SELECT * FROM tracked_groups`);
+    return rows.map((row) => {
+      const r = row as {
+        jid: string;
+        chatName: string | null;
+        lastHrMessageAtISO: string | null;
+      };
+      return {
+        jid: r.jid,
+        chatName: r.chatName || '',
+        lastHrMessageAtISO: r.lastHrMessageAtISO || null,
+      };
+    });
+  }
+
+  async upsertTrackedGroup(jid: string, chatName: string) {
+    const sql = `
+      INSERT INTO tracked_groups (jid, chatName, lastHrMessageAtISO)
+      VALUES (?, ?, NULL)
+      ON CONFLICT(jid) DO UPDATE SET
+        chatName=excluded.chatName
+    `;
+    await this.query(sql, [jid, chatName]);
+  }
+
+  async updateGroupHrMessageTime(jid: string, timeISO: string) {
+    const sql = `
+      UPDATE tracked_groups
+      SET lastHrMessageAtISO = ?
+      WHERE jid = ?
+    `;
+    await this.query(sql, [timeISO, jid]);
   }
 }

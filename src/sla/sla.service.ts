@@ -110,6 +110,10 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       }
     });
 
+    this.bot.command('weekly_report', async (ctx) => {
+      await this.sendWeeklyReport(ctx.chat.id);
+    });
+
     this.bot.launch().catch((err) => {
       this.logger.error('Failed to launch Telegram bot', err);
     });
@@ -172,7 +176,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       // Set to 5 seconds for testing? No, keep it as in the original code.
       // Original code had: deadline = receivedAt.plus({ seconds: 5 });
       // I will keep the original code behavior.
-      deadline = receivedAt.plus({ seconds: 5 });
+      deadline = receivedAt.plus({ seconds: 1000 });
     }
 
     return deadline;
@@ -191,12 +195,28 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    try {
+      await this.d1Service.upsertTrackedGroup(
+        payload.jid,
+        payload.chatName || '',
+      );
+    } catch (e) {
+      this.logger.error('Failed to upsert tracked group in D1', e);
+    }
+
     const participantPhone = payload.participant.split('@')[0].split(':')[0];
 
     if (this.hrPhones.has(participantPhone)) {
       this.logger.log(
         `HR member ${participantPhone} replied in ${payload.jid}, stopping SLA timer.`,
       );
+      const tz = this.getTimezone();
+      const nowISO = DateTime.now().setZone(tz).toISO() as string;
+      try {
+        await this.d1Service.updateGroupHrMessageTime(payload.jid, nowISO);
+      } catch (e) {
+        this.logger.error('Failed to update group HR message time in D1', e);
+      }
       await this.handleMessageReplied({ jid: payload.jid });
       return;
     }
@@ -229,7 +249,28 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   }
 
   @OnEvent('message.replied')
-  async handleMessageReplied(payload: { jid: string }) {
+  async handleMessageReplied(payload: {
+    jid: string;
+    isGroup?: boolean;
+    chatName?: string;
+  }) {
+    if (payload.isGroup) {
+      try {
+        await this.d1Service.upsertTrackedGroup(
+          payload.jid,
+          payload.chatName || '',
+        );
+        const tz = this.getTimezone();
+        const nowISO = DateTime.now().setZone(tz).toISO() as string;
+        await this.d1Service.updateGroupHrMessageTime(payload.jid, nowISO);
+      } catch (e) {
+        this.logger.error(
+          'Failed to update group HR message time on bot reply in D1',
+          e,
+        );
+      }
+    }
+
     if (this.pendingMessages.has(payload.jid)) {
       this.pendingMessages.delete(payload.jid);
       this.logger.log(`Replied to ${payload.jid}, timer stopped.`);
@@ -325,6 +366,58 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('Cleared all pending messages from D1.');
     } catch (e) {
       this.logger.error('Failed to clear pending messages from D1', e);
+    }
+  }
+
+  @Cron('0 17 * * *')
+  async dailyGroupReport() {
+    const groupChatId = this.configService.get<string>(
+      'TELEGRAM_GROUP_CHAT_ID',
+    );
+    if (groupChatId) {
+      await this.sendWeeklyReport(groupChatId);
+    }
+  }
+
+  private async sendWeeklyReport(chatId: string | number) {
+    if (!this.bot) return;
+
+    try {
+      const groups = await this.d1Service.getAllTrackedGroups();
+      const tz = this.getTimezone();
+      const now = DateTime.now().setZone(tz);
+      const startOfWeek = now.startOf('week');
+
+      const messaged: string[] = [];
+      const notMessaged: string[] = [];
+
+      for (const g of groups) {
+        const name = g.chatName || g.jid;
+        if (g.lastHrMessageAtISO) {
+          const lastTime = DateTime.fromISO(g.lastHrMessageAtISO, { zone: tz });
+          if (lastTime >= startOfWeek) {
+            messaged.push(`✅ ${name}`);
+          } else {
+            notMessaged.push(
+              `❌ ${name} (Last: ${lastTime.toFormat('dd MMM')})`,
+            );
+          }
+        } else {
+          notMessaged.push(`❌ ${name} (Never)`);
+        }
+      }
+
+      let text = `📊 *Daily HR Group Activity Report*\n_Week starting: ${startOfWeek.toFormat('dd MMM yyyy')}_\n\n`;
+      text += `*Needs Attention (${notMessaged.length}):*\n`;
+      text += notMessaged.length > 0 ? notMessaged.join('\n') : 'All good! 🎉';
+      text += `\n\n*Messaged This Week (${messaged.length}):*\n`;
+      text += messaged.length > 0 ? messaged.join('\n') : 'None yet.';
+
+      await this.bot.telegram.sendMessage(chatId, text, {
+        parse_mode: 'Markdown',
+      });
+    } catch (e) {
+      this.logger.error('Failed to generate weekly report', e);
     }
   }
 }
