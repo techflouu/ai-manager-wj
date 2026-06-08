@@ -1,6 +1,5 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { ConfigService } from '@nestjs/config';
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -19,10 +18,7 @@ export class WhatsappService implements OnModuleInit {
   // Toggle this flag to false if you don't want to log the display name
   private readonly logDisplayName = true;
 
-  constructor(
-    private eventEmitter: EventEmitter2,
-    private configService: ConfigService,
-  ) {}
+  constructor(private eventEmitter: EventEmitter2) {}
 
   async onModuleInit() {
     await this.connectToWhatsApp();
@@ -99,23 +95,11 @@ export class WhatsappService implements OnModuleInit {
         if (m.type === 'notify') {
           for (const msg of m.messages) {
             const jid = msg.key.remoteJid || '';
-            const participant = msg.key.participant || msg.key.remoteJid || '';
 
-            const rawHrNumbers = this.configService.get<string>(
-              'HR_PHONE_NUMBERS',
-              '',
-            );
-            const hrNumbers = rawHrNumbers
-              .split(',')
-              .map((n) => n.trim())
-              .filter(Boolean);
-
-            const isFromHR = hrNumbers.includes(participant) || msg.key.fromMe;
-
-            if (isFromHR) {
-              // It's a reply from HR (or bot itself)
+            if (msg.key.fromMe) {
+              // It's a reply from us
               this.eventEmitter.emit('message.replied', { jid });
-            } else if (msg.message) {
+            } else if (!msg.key.fromMe && msg.message) {
               // Incoming message
               const isGroup = jid.endsWith('@g.us');
               const chatType = isGroup ? 'Group' : 'Private';
