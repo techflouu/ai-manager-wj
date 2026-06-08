@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
@@ -7,9 +12,10 @@ import { DateTime } from 'luxon';
 import { D1Service, PendingMessage } from '../d1/d1.service';
 
 @Injectable()
-export class SlaService implements OnModuleInit {
+export class SlaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SlaService.name);
   private pendingMessages: Map<string, PendingMessage> = new Map();
+  private hrPhones: Set<string> = new Set();
   private bot: Telegraf | null = null;
 
   constructor(
@@ -29,6 +35,84 @@ export class SlaService implements OnModuleInit {
   async onModuleInit() {
     await this.d1Service.createTableIfNotExists();
     await this.loadState();
+    this.setupBotCommands();
+  }
+
+  onModuleDestroy() {
+    if (this.bot) {
+      this.bot.stop('SIGINT');
+    }
+  }
+
+  private setupBotCommands() {
+    if (!this.bot) return;
+
+    this.bot.command('list_hr_phones', async (ctx) => {
+      if (this.hrPhones.size === 0) {
+        await ctx.reply('No HR phone numbers are currently tracked.');
+        return;
+      }
+      const list = Array.from(this.hrPhones)
+        .map((p) => `• ${p}`)
+        .join('\n');
+      await ctx.reply(`Tracked HR Phone Numbers:\n${list}`);
+    });
+
+    this.bot.command('add_hr_phone', async (ctx) => {
+      const parts = ctx.message.text.split(' ');
+      if (parts.length < 2) {
+        await ctx.reply(
+          'Usage: /add_hr_phone <phone_number>\nExample: /add_hr_phone 6281234567890',
+        );
+        return;
+      }
+      const phone = parts[1].replace(/\D/g, ''); // strip non-numeric
+      if (!phone) {
+        await ctx.reply('Please provide a valid numeric phone number.');
+        return;
+      }
+
+      this.hrPhones.add(phone);
+      try {
+        await this.d1Service.addHrPhone(phone);
+        await ctx.reply(
+          `Successfully added ${phone} to HR phone numbers list.`,
+        );
+      } catch (err) {
+        await ctx.reply('Failed to save to database.');
+        this.logger.error('Failed to add HR phone', err);
+      }
+    });
+
+    this.bot.command('remove_hr_phone', async (ctx) => {
+      const parts = ctx.message.text.split(' ');
+      if (parts.length < 2) {
+        await ctx.reply(
+          'Usage: /remove_hr_phone <phone_number>\nExample: /remove_hr_phone 6281234567890',
+        );
+        return;
+      }
+      const phone = parts[1].replace(/\D/g, '');
+
+      if (this.hrPhones.has(phone)) {
+        this.hrPhones.delete(phone);
+        try {
+          await this.d1Service.removeHrPhone(phone);
+          await ctx.reply(
+            `Successfully removed ${phone} from HR phone numbers list.`,
+          );
+        } catch (e) {
+          await ctx.reply('Failed to remove from database.');
+          this.logger.error('Failed to remove HR phone', e);
+        }
+      } else {
+        await ctx.reply(`Phone number ${phone} is not in the list.`);
+      }
+    });
+
+    this.bot.launch().catch((err) => {
+      this.logger.error('Failed to launch Telegram bot', err);
+    });
   }
 
   private async loadState() {
@@ -40,8 +124,16 @@ export class SlaService implements OnModuleInit {
       this.logger.log(
         `Loaded ${this.pendingMessages.size} pending messages from D1 storage.`,
       );
+
+      const hrPhones = await this.d1Service.getAllHrPhones();
+      for (const p of hrPhones) {
+        this.hrPhones.add(p);
+      }
+      this.logger.log(
+        `Loaded ${this.hrPhones.size} HR phone numbers from D1 storage.`,
+      );
     } catch (e) {
-      this.logger.error('Failed to load pending messages from D1', e);
+      this.logger.error('Failed to load state from D1', e);
     }
   }
 
@@ -89,12 +181,22 @@ export class SlaService implements OnModuleInit {
   @OnEvent('message.received')
   async handleMessageReceived(payload: {
     jid: string;
+    participant: string;
     senderName: string;
     chatType: string;
     chatName?: string;
   }) {
     // Only track SLA for Group chats
     if (payload.chatType !== 'Group') {
+      return;
+    }
+
+    const participantPhone = payload.participant.split('@')[0];
+    if (this.hrPhones.has(participantPhone)) {
+      this.logger.log(
+        `HR member ${participantPhone} replied in ${payload.jid}, stopping SLA timer.`,
+      );
+      await this.handleMessageReplied({ jid: payload.jid });
       return;
     }
 

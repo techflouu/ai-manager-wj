@@ -104,9 +104,10 @@ export class WhatsappService implements OnModuleInit {
               const isGroup = jid.endsWith('@g.us');
               const chatType = isGroup ? 'Group' : 'Private';
               const senderName = msg.pushName || 'Unknown';
+              const participant = isGroup ? msg.key.participant || jid : jid;
               const displayString = this.logDisplayName
-                ? `${senderName} (${jid})`
-                : `${jid}`;
+                ? `${senderName} (${participant})`
+                : `${participant}`;
 
               let chatName = '';
               if (isGroup) {
@@ -124,6 +125,7 @@ export class WhatsappService implements OnModuleInit {
               // Emit the event to the SLA service
               this.eventEmitter.emit('message.received', {
                 jid,
+                participant,
                 senderName,
                 chatType,
                 chatName,

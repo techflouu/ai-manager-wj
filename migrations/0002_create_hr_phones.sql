@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS hr_phones (
+  phone TEXT PRIMARY KEY
+);

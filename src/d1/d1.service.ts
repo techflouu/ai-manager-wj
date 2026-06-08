@@ -85,6 +85,14 @@ export class D1Service implements OnModuleInit {
     `;
     await this.query(sql);
     this.logger.log('Ensured pending_messages table exists in D1.');
+
+    const sqlHrPhones = `
+      CREATE TABLE IF NOT EXISTS hr_phones (
+        phone TEXT PRIMARY KEY
+      );
+    `;
+    await this.query(sqlHrPhones);
+    this.logger.log('Ensured hr_phones table exists in D1.');
   }
 
   async getAllPendingMessages(): Promise<PendingMessage[]> {
@@ -148,5 +156,24 @@ export class D1Service implements OnModuleInit {
     await this.query(`UPDATE pending_messages SET notified = 1 WHERE jid = ?`, [
       jid,
     ]);
+  }
+
+  async getAllHrPhones(): Promise<string[]> {
+    const rows = await this.query(`SELECT phone FROM hr_phones`);
+    return rows.map((row) => {
+      const r = row as { phone: string };
+      return r.phone;
+    });
+  }
+
+  async addHrPhone(phone: string) {
+    await this.query(
+      `INSERT INTO hr_phones (phone) VALUES (?) ON CONFLICT(phone) DO NOTHING`,
+      [phone],
+    );
+  }
+
+  async removeHrPhone(phone: string) {
+    await this.query(`DELETE FROM hr_phones WHERE phone = ?`, [phone]);
   }
 }
