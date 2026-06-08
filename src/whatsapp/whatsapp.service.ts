@@ -1,5 +1,6 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { ConfigService } from '@nestjs/config';
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -18,7 +19,10 @@ export class WhatsappService implements OnModuleInit {
   // Toggle this flag to false if you don't want to log the display name
   private readonly logDisplayName = true;
 
-  constructor(private eventEmitter: EventEmitter2) {}
+  constructor(
+    private eventEmitter: EventEmitter2,
+    private configService: ConfigService,
+  ) {}
 
   async onModuleInit() {
     await this.connectToWhatsApp();
@@ -91,49 +95,77 @@ export class WhatsappService implements OnModuleInit {
     });
 
     this.sock.ev.on('messages.upsert', (m) => {
-      if (m.type === 'notify') {
-        for (const msg of m.messages) {
-          const jid = msg.key.remoteJid || '';
+      void (async () => {
+        if (m.type === 'notify') {
+          for (const msg of m.messages) {
+            const jid = msg.key.remoteJid || '';
+            const participant = msg.key.participant || msg.key.remoteJid || '';
 
-          if (msg.key.fromMe) {
-            // It's a reply from us
-            this.eventEmitter.emit('message.replied', { jid });
-          } else if (!msg.key.fromMe && msg.message) {
-            // Incoming message
-            const isGroup = jid.endsWith('@g.us');
-            const chatType = isGroup ? 'Group' : 'Private';
-            const senderName = msg.pushName || 'Unknown';
-            const displayString = this.logDisplayName
-              ? `${senderName} (${jid})`
-              : `${jid}`;
+            const rawHrNumbers = this.configService.get<string>(
+              'HR_PHONE_NUMBERS',
+              '',
+            );
+            const hrNumbers = rawHrNumbers
+              .split(',')
+              .map((n) => n.trim())
+              .filter(Boolean);
 
-            // Emit the event to the SLA service
-            this.eventEmitter.emit('message.received', {
-              jid,
-              senderName,
-              chatType,
-            });
+            const isFromHR = hrNumbers.includes(participant) || msg.key.fromMe;
 
-            if (this.logFullMessageJson) {
-              this.logger.log(
-                `Received [${chatType}] message from ${displayString}: ${JSON.stringify(msg.message)}`,
-              );
-            } else {
-              // Extract the actual text content from the message object
-              const textMessage =
-                msg.message.conversation ||
-                msg.message.extendedTextMessage?.text ||
-                msg.message.imageMessage?.caption ||
-                msg.message.videoMessage?.caption ||
-                '[Non-text message]';
+            if (isFromHR) {
+              // It's a reply from HR (or bot itself)
+              this.eventEmitter.emit('message.replied', { jid });
+            } else if (msg.message) {
+              // Incoming message
+              const isGroup = jid.endsWith('@g.us');
+              const chatType = isGroup ? 'Group' : 'Private';
+              const senderName = msg.pushName || 'Unknown';
+              const displayString = this.logDisplayName
+                ? `${senderName} (${jid})`
+                : `${jid}`;
 
-              this.logger.log(
-                `Received [${chatType}] message from ${displayString}: ${textMessage}`,
-              );
+              let chatName = '';
+              if (isGroup) {
+                try {
+                  const groupMetadata = await this.sock.groupMetadata(jid);
+                  chatName = groupMetadata.subject;
+                } catch (err) {
+                  this.logger.warn(
+                    `Could not fetch group metadata for ${jid}`,
+                    err,
+                  );
+                }
+              }
+
+              // Emit the event to the SLA service
+              this.eventEmitter.emit('message.received', {
+                jid,
+                senderName,
+                chatType,
+                chatName,
+              });
+
+              if (this.logFullMessageJson) {
+                this.logger.log(
+                  `Received [${chatType}] message from ${displayString}: ${JSON.stringify(msg.message)}`,
+                );
+              } else {
+                // Extract the actual text content from the message object
+                const textMessage =
+                  msg.message.conversation ||
+                  msg.message.extendedTextMessage?.text ||
+                  msg.message.imageMessage?.caption ||
+                  msg.message.videoMessage?.caption ||
+                  '[Non-text message]';
+
+                this.logger.log(
+                  `Received [${chatType}] message from ${displayString}: ${textMessage}`,
+                );
+              }
             }
           }
         }
-      }
+      })();
     });
   }
 }

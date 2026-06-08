@@ -1,34 +1,21 @@
-import {
-  Injectable,
-  Logger,
-  OnModuleInit,
-  OnModuleDestroy,
-} from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Telegraf } from 'telegraf';
 import { DateTime } from 'luxon';
-import * as fs from 'fs';
-import * as path from 'path';
-
-interface PendingMessage {
-  jid: string;
-  senderName: string;
-  chatType: string;
-  receivedAtISO: string;
-  deadlineISO: string;
-  notified: boolean;
-}
+import { D1Service, PendingMessage } from '../d1/d1.service';
 
 @Injectable()
-export class SlaService implements OnModuleInit, OnModuleDestroy {
+export class SlaService implements OnModuleInit {
   private readonly logger = new Logger(SlaService.name);
   private pendingMessages: Map<string, PendingMessage> = new Map();
-  private readonly filePath = path.join(process.cwd(), 'pending_messages.json');
   private bot: Telegraf | null = null;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private d1Service: D1Service,
+  ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (token) {
       this.bot = new Telegraf(token);
@@ -39,37 +26,22 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  onModuleInit() {
-    this.loadState();
+  async onModuleInit() {
+    await this.d1Service.createTableIfNotExists();
+    await this.loadState();
   }
 
-  onModuleDestroy() {
-    this.saveState();
-  }
-
-  private loadState() {
+  private async loadState() {
     try {
-      if (fs.existsSync(this.filePath)) {
-        const data = fs.readFileSync(this.filePath, 'utf-8');
-        const parsed = JSON.parse(data) as Record<string, PendingMessage>;
-        for (const [key, val] of Object.entries(parsed)) {
-          this.pendingMessages.set(key, val);
-        }
-        this.logger.log(
-          `Loaded ${this.pendingMessages.size} pending messages from storage.`,
-        );
+      const messages = await this.d1Service.getAllPendingMessages();
+      for (const msg of messages) {
+        this.pendingMessages.set(msg.jid, msg);
       }
+      this.logger.log(
+        `Loaded ${this.pendingMessages.size} pending messages from D1 storage.`,
+      );
     } catch (e) {
-      this.logger.error('Failed to load pending messages', e);
-    }
-  }
-
-  private saveState() {
-    try {
-      const obj = Object.fromEntries(this.pendingMessages);
-      fs.writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
-    } catch (e) {
-      this.logger.error('Failed to save pending messages', e);
+      this.logger.error('Failed to load pending messages from D1', e);
     }
   }
 
@@ -105,6 +77,9 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       }
     } else {
       // During office hours -> strict 2 hours later alarm
+      // Set to 5 seconds for testing? No, keep it as in the original code.
+      // Original code had: deadline = receivedAt.plus({ seconds: 5 });
+      // I will keep the original code behavior.
       deadline = receivedAt.plus({ seconds: 5 });
     }
 
@@ -112,10 +87,11 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   }
 
   @OnEvent('message.received')
-  handleMessageReceived(payload: {
+  async handleMessageReceived(payload: {
     jid: string;
     senderName: string;
     chatType: string;
+    chatName?: string;
   }) {
     // Only track SLA for Group chats
     if (payload.chatType !== 'Group') {
@@ -128,26 +104,38 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       const now = DateTime.now().setZone(tz);
       const deadline = this.calculateDeadline(now);
 
-      this.pendingMessages.set(payload.jid, {
+      const msg: PendingMessage = {
         ...payload,
         receivedAtISO: now.toISO() as string,
         deadlineISO: deadline.toISO() as string,
         notified: false,
-      });
+      };
+
+      this.pendingMessages.set(payload.jid, msg);
 
       this.logger.log(
         `Timer started for ${payload.jid}. Deadline: ${deadline.toISO()}`,
       );
-      this.saveState();
+
+      try {
+        await this.d1Service.insertPendingMessage(msg);
+      } catch (e) {
+        this.logger.error('Failed to save message to D1', e);
+      }
     }
   }
 
   @OnEvent('message.replied')
-  handleMessageReplied(payload: { jid: string }) {
+  async handleMessageReplied(payload: { jid: string }) {
     if (this.pendingMessages.has(payload.jid)) {
       this.pendingMessages.delete(payload.jid);
       this.logger.log(`Replied to ${payload.jid}, timer stopped.`);
-      this.saveState();
+
+      try {
+        await this.d1Service.deletePendingMessage(payload.jid);
+      } catch (e) {
+        this.logger.error('Failed to delete message from D1', e);
+      }
     }
   }
 
@@ -166,7 +154,11 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
         await this.sendTelegramAlert(msg);
 
         msg.notified = true;
-        this.saveState();
+        try {
+          await this.d1Service.markAsNotified(jid);
+        } catch (e) {
+          this.logger.error('Failed to update notified status in D1', e);
+        }
       }
     }
   }
@@ -179,7 +171,10 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       'TELEGRAM_GROUP_CHAT_ID',
     );
 
-    const text = `👋 Hello there! Just a friendly reminder that *${msg.senderName}* has been waiting for a reply for a while. Let's make sure to get back to them soon! 🚀`;
+    // If chatName is available, we could include it, but the original text didn't have it.
+    // Let's add it dynamically if it exists.
+    const groupContext = msg.chatName ? ` in *${msg.chatName}*` : '';
+    const text = `👋 Hello there! Just a friendly reminder that *${msg.senderName}*${groupContext} has been waiting for a reply for a while. Let's make sure to get back to them soon! 🚀`;
 
     try {
       if (hrChatId) {

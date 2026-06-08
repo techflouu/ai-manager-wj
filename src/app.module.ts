@@ -6,6 +6,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { WhatsappService } from './whatsapp/whatsapp.service';
 import { SlaModule } from './sla/sla.module';
+import { D1Module } from './d1/d1.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { SlaModule } from './sla/sla.module';
     ScheduleModule.forRoot(),
     EventEmitterModule.forRoot(),
     SlaModule,
+    D1Module,
   ],
   controllers: [AppController],
   providers: [AppService, WhatsappService],
