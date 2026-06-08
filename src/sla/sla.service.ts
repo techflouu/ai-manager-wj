@@ -392,6 +392,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
 
     const targetedHrChatIds: string[] = [];
+    const missingHrTelegramPhones: string[] = [];
     for (const phone of allHrPhones) {
       // Check id, lid, and phoneNumber fields for the phone number
       const isInGroup = groupParticipants.some((participant) => {
@@ -406,8 +407,12 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       });
       const tgId = this.hrRecords.get(phone);
       this.logger.log(`HR Phone ${phone}: inGroup=${isInGroup}, tgId=${tgId}`);
-      if (isInGroup && tgId) {
-        targetedHrChatIds.push(tgId);
+      if (isInGroup) {
+        if (tgId) {
+          targetedHrChatIds.push(tgId);
+        } else {
+          missingHrTelegramPhones.push(phone);
+        }
       }
     }
     this.logger.log(
@@ -457,6 +462,11 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
             }
           }
           groupText = `${text}\n\ncc: ${ccs.join(', ')}`;
+        } else if (missingHrTelegramPhones.length > 0) {
+          const missingList = missingHrTelegramPhones
+            .map((p) => `• ${p}`)
+            .join('\n');
+          groupText = `${text}\n\n⚠️ The following HR numbers in this group do not have Telegram IDs linked:\n${missingList}`;
         }
 
         await this.bot.telegram.sendMessage(groupChatId, groupText, {
