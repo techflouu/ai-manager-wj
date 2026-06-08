@@ -242,7 +242,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS)
+  @Cron(CronExpression.EVERY_MINUTE)
   async checkSlaBreaches() {
     const tz = this.getTimezone();
     const now = DateTime.now().setZone(tz);
