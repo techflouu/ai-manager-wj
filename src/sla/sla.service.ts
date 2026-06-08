@@ -212,4 +212,16 @@ export class SlaService implements OnModuleInit {
       this.logger.error('Failed to send Telegram alert', e);
     }
   }
+
+  async clearAllPendingMessages() {
+    this.pendingMessages.clear();
+    this.logger.log('Cleared all pending messages from memory.');
+
+    try {
+      await this.d1Service.deleteAllPendingMessages();
+      this.logger.log('Cleared all pending messages from D1.');
+    } catch (e) {
+      this.logger.error('Failed to clear pending messages from D1', e);
+    }
+  }
 }

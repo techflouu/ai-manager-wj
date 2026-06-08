@@ -140,6 +140,10 @@ export class D1Service implements OnModuleInit {
     await this.query(`DELETE FROM pending_messages WHERE jid = ?`, [jid]);
   }
 
+  async deleteAllPendingMessages() {
+    await this.query(`DELETE FROM pending_messages`);
+  }
+
   async markAsNotified(jid: string) {
     await this.query(`UPDATE pending_messages SET notified = 1 WHERE jid = ?`, [
       jid,
