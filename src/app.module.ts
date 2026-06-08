@@ -4,7 +4,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { WhatsappService } from './whatsapp/whatsapp.service';
+import { WhatsappModule } from './whatsapp/whatsapp.module';
 import { SlaModule } from './sla/sla.module';
 import { D1Module } from './d1/d1.module';
 
@@ -15,8 +15,9 @@ import { D1Module } from './d1/d1.module';
     EventEmitterModule.forRoot(),
     SlaModule,
     D1Module,
+    WhatsappModule,
   ],
   controllers: [AppController],
-  providers: [AppService, WhatsappService],
+  providers: [AppService],
 })
 export class AppModule {}

@@ -10,6 +10,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { Telegraf } from 'telegraf';
 import { DateTime } from 'luxon';
 import { D1Service, PendingMessage } from '../d1/d1.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 
 @Injectable()
 export class SlaService implements OnModuleInit, OnModuleDestroy {
@@ -21,6 +22,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   constructor(
     private configService: ConfigService,
     private d1Service: D1Service,
+    private whatsappService: WhatsappService,
   ) {
     const token = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     if (token) {
@@ -243,7 +245,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       // Set to 5 seconds for testing? No, keep it as in the original code.
       // Original code had: deadline = receivedAt.plus({ seconds: 5 });
       // I will keep the original code behavior.
-      deadline = receivedAt.plus({ seconds: 1000 });
+      deadline = receivedAt.plus({ seconds: 10 });
     }
 
     return deadline;
@@ -350,7 +352,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_10_SECONDS)
   async checkSlaBreaches() {
     const tz = this.getTimezone();
     const now = DateTime.now().setZone(tz);
@@ -377,13 +379,40 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   private async sendTelegramAlert(msg: PendingMessage) {
     if (!this.bot) return;
 
-    const hrChatIds = Array.from(this.hrRecords.values()).filter(
-      (id): id is string => id !== null,
-    );
-    const envHrChatId = this.configService.get<string>('TELEGRAM_HR_CHAT_ID');
-    if (envHrChatId && !hrChatIds.includes(envHrChatId)) {
-      hrChatIds.push(envHrChatId);
+    const allHrPhones = Array.from(this.hrRecords.keys());
+    let groupParticipants: {
+      id: string;
+      lid?: string;
+      phoneNumber?: string;
+    }[] = [];
+    if (msg.chatType === 'Group') {
+      groupParticipants = await this.whatsappService.getGroupParticipants(
+        msg.jid,
+      );
     }
+
+    const targetedHrChatIds: string[] = [];
+    for (const phone of allHrPhones) {
+      // Check id, lid, and phoneNumber fields for the phone number
+      const isInGroup = groupParticipants.some((participant) => {
+        const pId = participant.id || '';
+        const pLid = participant.lid || '';
+        const pPhone = participant.phoneNumber || '';
+        return (
+          pId.startsWith(phone + '@') ||
+          pLid.startsWith(phone + '@') ||
+          pPhone.startsWith(phone + '@')
+        );
+      });
+      const tgId = this.hrRecords.get(phone);
+      this.logger.log(`HR Phone ${phone}: inGroup=${isInGroup}, tgId=${tgId}`);
+      if (isInGroup && tgId) {
+        targetedHrChatIds.push(tgId);
+      }
+    }
+    this.logger.log(
+      `Targeted HR Chat IDs: ${JSON.stringify(targetedHrChatIds)}`,
+    );
 
     const groupChatId = this.configService.get<string>(
       'TELEGRAM_GROUP_CHAT_ID',
@@ -395,7 +424,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     const text = `👋 Hello there! Just a friendly reminder that *${msg.senderName}*${groupContext} has been waiting for a reply for a while. Let's make sure to get back to them soon! 🚀`;
 
     try {
-      for (const hrChatId of hrChatIds) {
+      for (const hrChatId of targetedHrChatIds) {
         try {
           await this.bot.telegram.sendMessage(hrChatId, text, {
             parse_mode: 'Markdown',
@@ -408,9 +437,9 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
 
       if (groupChatId) {
         let groupText = text;
-        if (hrChatIds.length > 0) {
+        if (targetedHrChatIds.length > 0) {
           const ccs: string[] = [];
-          for (const hrChatId of hrChatIds) {
+          for (const hrChatId of targetedHrChatIds) {
             try {
               const chat = await this.bot.telegram.getChat(hrChatId);
               if ('username' in chat && chat.username) {

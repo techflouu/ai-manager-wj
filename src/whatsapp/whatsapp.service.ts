@@ -37,6 +37,22 @@ export class WhatsappService implements OnModuleInit {
     return { message: 'Disconnected and logged out successfully' };
   }
 
+  async getGroupParticipants(
+    jid: string,
+  ): Promise<{ id: string; lid?: string; phoneNumber?: string }[]> {
+    if (!this.sock) return [];
+    try {
+      const metadata = await this.sock.groupMetadata(jid);
+      this.logger.log(
+        `Raw group metadata participants: ${JSON.stringify(metadata.participants)}`,
+      );
+      return metadata.participants;
+    } catch (e) {
+      this.logger.warn(`Could not fetch group metadata for ${jid}`, e);
+      return [];
+    }
+  }
+
   async connectToWhatsApp() {
     const { state, saveCreds } =
       await useMultiFileAuthState('auth_info_baileys');
