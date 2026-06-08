@@ -242,10 +242,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       }
     } else {
       // During office hours -> strict 2 hours later alarm
-      // Set to 5 seconds for testing? No, keep it as in the original code.
-      // Original code had: deadline = receivedAt.plus({ seconds: 5 });
-      // I will keep the original code behavior.
-      deadline = receivedAt.plus({ seconds: 10 });
+      deadline = receivedAt.plus({ hours: 2 });
     }
 
     return deadline;
@@ -352,7 +349,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS)
+  @Cron(CronExpression.EVERY_MINUTE)
   async checkSlaBreaches() {
     const tz = this.getTimezone();
     const now = DateTime.now().setZone(tz);
