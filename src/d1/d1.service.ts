@@ -18,6 +18,11 @@ export interface TrackedGroup {
   lastHrMessageAtISO: string | null;
 }
 
+export interface HrRecord {
+  phone: string;
+  telegramChatId: string | null;
+}
+
 @Injectable()
 export class D1Service implements OnModuleInit {
   private readonly logger = new Logger(D1Service.name);
@@ -94,11 +99,22 @@ export class D1Service implements OnModuleInit {
 
     const sqlHrPhones = `
       CREATE TABLE IF NOT EXISTS hr_phones (
-        phone TEXT PRIMARY KEY
+        phone TEXT PRIMARY KEY,
+        telegramChatId TEXT
       );
     `;
     await this.query(sqlHrPhones);
     this.logger.log('Ensured hr_phones table exists in D1.');
+
+    // Automatically add column to existing tables if needed
+    const hrPhonesInfo = await this.query(`PRAGMA table_info(hr_phones)`);
+    const hasTelegramChatId = (hrPhonesInfo as { name: string }[]).some(
+      (col) => col.name === 'telegramChatId',
+    );
+    if (!hasTelegramChatId) {
+      await this.query(`ALTER TABLE hr_phones ADD COLUMN telegramChatId TEXT;`);
+      this.logger.log('Added telegramChatId column to hr_phones table.');
+    }
 
     const sqlTrackedGroups = `
       CREATE TABLE IF NOT EXISTS tracked_groups (
@@ -174,11 +190,16 @@ export class D1Service implements OnModuleInit {
     ]);
   }
 
-  async getAllHrPhones(): Promise<string[]> {
-    const rows = await this.query(`SELECT phone FROM hr_phones`);
+  async getAllHrRecords(): Promise<HrRecord[]> {
+    const rows = await this.query(
+      `SELECT phone, telegramChatId FROM hr_phones`,
+    );
     return rows.map((row) => {
-      const r = row as { phone: string };
-      return r.phone;
+      const r = row as { phone: string; telegramChatId: string | null };
+      return {
+        phone: r.phone,
+        telegramChatId: r.telegramChatId || null,
+      };
     });
   }
 
@@ -191,6 +212,13 @@ export class D1Service implements OnModuleInit {
 
   async removeHrPhone(phone: string) {
     await this.query(`DELETE FROM hr_phones WHERE phone = ?`, [phone]);
+  }
+
+  async updateHrTelegramId(phone: string, chatId: string | null) {
+    await this.query(
+      `UPDATE hr_phones SET telegramChatId = ? WHERE phone = ?`,
+      [chatId, phone],
+    );
   }
 
   async getAllTrackedGroups(): Promise<TrackedGroup[]> {

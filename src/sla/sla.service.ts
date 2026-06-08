@@ -15,7 +15,7 @@ import { D1Service, PendingMessage } from '../d1/d1.service';
 export class SlaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SlaService.name);
   private pendingMessages: Map<string, PendingMessage> = new Map();
-  private hrPhones: Set<string> = new Set();
+  private hrRecords: Map<string, string | null> = new Map();
   private bot: Telegraf | null = null;
 
   constructor(
@@ -47,15 +47,23 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   private setupBotCommands() {
     if (!this.bot) return;
 
-    this.bot.command('list_hr_phones', async (ctx) => {
-      if (this.hrPhones.size === 0) {
-        await ctx.reply('No HR phone numbers are currently tracked.');
+    this.bot.command('list_hr', async (ctx) => {
+      const myId = ctx.chat.id;
+      let text = `Your Telegram Chat ID: ${myId}\n\n`;
+
+      if (this.hrRecords.size === 0) {
+        text += 'No HR phone numbers are currently tracked.';
+        await ctx.reply(text);
         return;
       }
-      const list = Array.from(this.hrPhones)
-        .map((p) => `• ${p}`)
+
+      const list = Array.from(this.hrRecords.entries())
+        .map(
+          ([p, t]) => `• Phone: ${p} | Telegram ID: ${t ? t : '(Not Added)'}`,
+        )
         .join('\n');
-      await ctx.reply(`Tracked HR Phone Numbers:\n${list}`);
+      text += `Tracked HR Records:\n${list}`;
+      await ctx.reply(text);
     });
 
     this.bot.command('add_hr_phone', async (ctx) => {
@@ -72,7 +80,9 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      this.hrPhones.add(phone);
+      if (!this.hrRecords.has(phone)) {
+        this.hrRecords.set(phone, null);
+      }
       try {
         await this.d1Service.addHrPhone(phone);
         await ctx.reply(
@@ -94,8 +104,8 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       }
       const phone = parts[1].replace(/\D/g, '');
 
-      if (this.hrPhones.has(phone)) {
-        this.hrPhones.delete(phone);
+      if (this.hrRecords.has(phone)) {
+        this.hrRecords.delete(phone);
         try {
           await this.d1Service.removeHrPhone(phone);
           await ctx.reply(
@@ -107,6 +117,63 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
         }
       } else {
         await ctx.reply(`Phone number ${phone} is not in the list.`);
+      }
+    });
+
+    this.bot.command('add_hr_telegram', async (ctx) => {
+      const parts = ctx.message.text.split(' ');
+      if (parts.length < 2) {
+        await ctx.reply(
+          'Usage: /add_hr_telegram <phone_number> [chat_id]\nExample: /add_hr_telegram 6281234567890\nIf chat_id is omitted, your current chat ID is used.',
+        );
+        return;
+      }
+      const phone = parts[1].replace(/\D/g, '');
+      const chatId = parts[2] ? parts[2].trim() : String(ctx.chat.id);
+
+      if (!this.hrRecords.has(phone)) {
+        await ctx.reply(
+          `Phone number ${phone} is not tracked. Please add it first using /add_hr_phone.`,
+        );
+        return;
+      }
+
+      this.hrRecords.set(phone, chatId);
+      try {
+        await this.d1Service.updateHrTelegramId(phone, chatId);
+        await ctx.reply(
+          `Successfully linked Telegram ID ${chatId} to HR phone ${phone}.`,
+        );
+      } catch (err) {
+        await ctx.reply('Failed to save to database.');
+        this.logger.error('Failed to link HR telegram id', err);
+      }
+    });
+
+    this.bot.command('remove_hr_telegram', async (ctx) => {
+      const parts = ctx.message.text.split(' ');
+      if (parts.length < 2) {
+        await ctx.reply(
+          'Usage: /remove_hr_telegram <phone_number>\nExample: /remove_hr_telegram 6281234567890',
+        );
+        return;
+      }
+      const phone = parts[1].replace(/\D/g, '');
+
+      if (!this.hrRecords.has(phone)) {
+        await ctx.reply(`Phone number ${phone} is not tracked.`);
+        return;
+      }
+
+      this.hrRecords.set(phone, null);
+      try {
+        await this.d1Service.updateHrTelegramId(phone, null);
+        await ctx.reply(
+          `Successfully removed Telegram ID from HR phone ${phone}.`,
+        );
+      } catch (err) {
+        await ctx.reply('Failed to update database.');
+        this.logger.error('Failed to remove HR telegram id', err);
       }
     });
 
@@ -129,12 +196,12 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
         `Loaded ${this.pendingMessages.size} pending messages from D1 storage.`,
       );
 
-      const hrPhones = await this.d1Service.getAllHrPhones();
-      for (const p of hrPhones) {
-        this.hrPhones.add(p);
+      const hrRecords = await this.d1Service.getAllHrRecords();
+      for (const r of hrRecords) {
+        this.hrRecords.set(r.phone, r.telegramChatId);
       }
       this.logger.log(
-        `Loaded ${this.hrPhones.size} HR phone numbers from D1 storage.`,
+        `Loaded ${this.hrRecords.size} HR records from D1 storage.`,
       );
     } catch (e) {
       this.logger.error('Failed to load state from D1', e);
@@ -206,7 +273,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
 
     const participantPhone = payload.participant.split('@')[0].split(':')[0];
 
-    if (this.hrPhones.has(participantPhone)) {
+    if (this.hrRecords.has(participantPhone)) {
       this.logger.log(
         `HR member ${participantPhone} replied in ${payload.jid}, stopping SLA timer.`,
       );
@@ -310,7 +377,14 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   private async sendTelegramAlert(msg: PendingMessage) {
     if (!this.bot) return;
 
-    const hrChatId = this.configService.get<string>('TELEGRAM_HR_CHAT_ID');
+    const hrChatIds = Array.from(this.hrRecords.values()).filter(
+      (id): id is string => id !== null,
+    );
+    const envHrChatId = this.configService.get<string>('TELEGRAM_HR_CHAT_ID');
+    if (envHrChatId && !hrChatIds.includes(envHrChatId)) {
+      hrChatIds.push(envHrChatId);
+    }
+
     const groupChatId = this.configService.get<string>(
       'TELEGRAM_GROUP_CHAT_ID',
     );
@@ -321,30 +395,39 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     const text = `👋 Hello there! Just a friendly reminder that *${msg.senderName}*${groupContext} has been waiting for a reply for a while. Let's make sure to get back to them soon! 🚀`;
 
     try {
-      if (hrChatId) {
-        await this.bot.telegram.sendMessage(hrChatId, text, {
-          parse_mode: 'Markdown',
-        });
-        this.logger.log(`Sent alert to HR (${hrChatId})`);
+      for (const hrChatId of hrChatIds) {
+        try {
+          await this.bot.telegram.sendMessage(hrChatId, text, {
+            parse_mode: 'Markdown',
+          });
+          this.logger.log(`Sent alert to HR (${hrChatId})`);
+        } catch (e) {
+          this.logger.error(`Failed to send alert to HR (${hrChatId})`, e);
+        }
       }
+
       if (groupChatId) {
         let groupText = text;
-        if (hrChatId) {
-          try {
-            const chat = await this.bot.telegram.getChat(hrChatId);
-            if ('username' in chat && chat.username) {
-              groupText = `${text}\n\ncc: @${chat.username}`;
-            } else if ('first_name' in chat && chat.first_name) {
-              groupText = `${text}\n\ncc: [${chat.first_name}](tg://user?id=${hrChatId})`;
-            } else {
-              groupText = `${text}\n\ncc: [HR](tg://user?id=${hrChatId})`;
+        if (hrChatIds.length > 0) {
+          const ccs: string[] = [];
+          for (const hrChatId of hrChatIds) {
+            try {
+              const chat = await this.bot.telegram.getChat(hrChatId);
+              if ('username' in chat && chat.username) {
+                ccs.push(`@${chat.username}`);
+              } else if ('first_name' in chat && chat.first_name) {
+                ccs.push(`[${chat.first_name}](tg://user?id=${hrChatId})`);
+              } else {
+                ccs.push(`[HR](tg://user?id=${hrChatId})`);
+              }
+            } catch (err) {
+              const errorMessage =
+                err instanceof Error ? err.message : String(err);
+              this.logger.warn(`Could not fetch HR chat info: ${errorMessage}`);
+              ccs.push(`[HR](tg://user?id=${hrChatId})`);
             }
-          } catch (err) {
-            const errorMessage =
-              err instanceof Error ? err.message : String(err);
-            this.logger.warn(`Could not fetch HR chat info: ${errorMessage}`);
-            groupText = `${text}\n\ncc: [HR](tg://user?id=${hrChatId})`;
           }
+          groupText = `${text}\n\ncc: ${ccs.join(', ')}`;
         }
 
         await this.bot.telegram.sendMessage(groupChatId, groupText, {
