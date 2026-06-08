@@ -117,6 +117,11 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     senderName: string;
     chatType: string;
   }) {
+    // Only track SLA for Group chats
+    if (payload.chatType !== 'Group') {
+      return;
+    }
+
     // Only track if not already tracking (first unanswered message starts the timer)
     if (!this.pendingMessages.has(payload.jid)) {
       const tz = this.getTimezone();
@@ -146,7 +151,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  @Cron(CronExpression.EVERY_MINUTE)
+  @Cron(CronExpression.EVERY_10_SECONDS)
   async checkSlaBreaches() {
     const tz = this.getTimezone();
     const now = DateTime.now().setZone(tz);
@@ -174,7 +179,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       'TELEGRAM_GROUP_CHAT_ID',
     );
 
-    const text = `🚨 *SLA Breach Alert* 🚨\n\nNo reply has been sent to *${msg.senderName}* (${msg.chatType}) for the past 2 hours (or since last working day).\n\nJID: \`${msg.jid}\``;
+    const text = `👋 Hello there! Just a friendly reminder that *${msg.senderName}* has been waiting for a reply for a while. Let's make sure to get back to them soon! 🚀`;
 
     try {
       if (hrChatId) {
@@ -184,7 +189,26 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`Sent alert to HR (${hrChatId})`);
       }
       if (groupChatId) {
-        await this.bot.telegram.sendMessage(groupChatId, text, {
+        let groupText = text;
+        if (hrChatId) {
+          try {
+            const chat = await this.bot.telegram.getChat(hrChatId);
+            if ('username' in chat && chat.username) {
+              groupText = `${text}\n\ncc: @${chat.username}`;
+            } else if ('first_name' in chat && chat.first_name) {
+              groupText = `${text}\n\ncc: [${chat.first_name}](tg://user?id=${hrChatId})`;
+            } else {
+              groupText = `${text}\n\ncc: [HR](tg://user?id=${hrChatId})`;
+            }
+          } catch (err) {
+            const errorMessage =
+              err instanceof Error ? err.message : String(err);
+            this.logger.warn(`Could not fetch HR chat info: ${errorMessage}`);
+            groupText = `${text}\n\ncc: [HR](tg://user?id=${hrChatId})`;
+          }
+        }
+
+        await this.bot.telegram.sendMessage(groupChatId, groupText, {
           parse_mode: 'Markdown',
         });
         this.logger.log(`Sent alert to Group (${groupChatId})`);
