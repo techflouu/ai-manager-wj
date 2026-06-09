@@ -1,13 +1,11 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import makeWASocket, {
-  DisconnectReason,
-  useMultiFileAuthState,
-} from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import * as qrcode from 'qrcode-terminal';
 import pino from 'pino';
-import * as fs from 'fs';
+import { D1Service } from '../d1/d1.service';
+import { useD1AuthState } from './use-d1-auth-state';
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
@@ -19,7 +17,10 @@ export class WhatsappService implements OnModuleInit {
   private readonly logDisplayName = true;
   public latestQr: string | null = null;
 
-  constructor(private eventEmitter: EventEmitter2) {}
+  constructor(
+    private eventEmitter: EventEmitter2,
+    private d1Service: D1Service,
+  ) {}
 
   async onModuleInit() {
     await this.connectToWhatsApp();
@@ -59,8 +60,7 @@ export class WhatsappService implements OnModuleInit {
   }
 
   async connectToWhatsApp() {
-    const { state, saveCreds } =
-      await useMultiFileAuthState('auth_info_baileys');
+    const { state, saveCreds } = await useD1AuthState(this.d1Service);
 
     this.sock = makeWASocket({
       auth: state,
@@ -93,11 +93,9 @@ export class WhatsappService implements OnModuleInit {
           this.logger.log(
             'Logged out. Clearing session and generating new QR code...',
           );
-          try {
-            fs.rmSync('auth_info_baileys', { recursive: true, force: true });
-          } catch (e) {
-            this.logger.error('Failed to delete auth_info_baileys folder', e);
-          }
+          this.d1Service.query(`DELETE FROM baileys_auth`).catch((e) => {
+            this.logger.error('Failed to clear baileys_auth from D1', e);
+          });
 
           setTimeout(() => {
             void this.connectToWhatsApp();

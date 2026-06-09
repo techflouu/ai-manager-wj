@@ -82,7 +82,57 @@ export class D1Service implements OnModuleInit {
     }
   }
 
+  async batch(
+    queries: { sql: string; params: unknown[] }[],
+  ): Promise<unknown[][]> {
+    if (!this.accountId || !this.apiToken || !this.dbId) {
+      this.logger.error('Cannot execute batch query: missing D1 credentials.');
+      return [];
+    }
+
+    if (queries.length === 0) return [];
+
+    const url = `https://api.cloudflare.com/client/v4/accounts/${this.accountId}/d1/database/${this.dbId}/query`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiToken}`,
+        },
+        body: JSON.stringify(queries),
+      });
+
+      const data = (await response.json()) as D1Response;
+
+      if (!response.ok || !data.success) {
+        this.logger.error(
+          `D1 Batch Query failed: ${JSON.stringify(data.errors)}`,
+        );
+        return [];
+      }
+
+      return data.result?.map((r) => r.results) || [];
+    } catch (error) {
+      this.logger.error(
+        'Failed to communicate with Cloudflare D1 API (batch)',
+        error,
+      );
+      return [];
+    }
+  }
+
   async createTableIfNotExists() {
+    const sqlBaileysAuth = `
+      CREATE TABLE IF NOT EXISTS baileys_auth (
+        key TEXT PRIMARY KEY,
+        data TEXT
+      );
+    `;
+    await this.query(sqlBaileysAuth);
+    this.logger.log('Ensured baileys_auth table exists in D1.');
+
     const sql = `
       CREATE TABLE IF NOT EXISTS pending_messages (
         jid TEXT PRIMARY KEY,
