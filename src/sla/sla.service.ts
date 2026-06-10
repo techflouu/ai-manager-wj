@@ -215,37 +215,8 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
   }
 
   private calculateDeadline(receivedAt: DateTime): DateTime {
-    // Office hours: Mon-Fri, 9am - 6pm.
-    const isWeekend = receivedAt.weekday === 6 || receivedAt.weekday === 7;
-    const isBeforeOfficeHours = receivedAt.hour < 9;
-    const isAfterOfficeHours = receivedAt.hour >= 18;
-
-    let deadline: DateTime;
-
-    if (isWeekend || isBeforeOfficeHours || isAfterOfficeHours) {
-      // Outside office hours -> Deadline is next working day 10:00 AM
-      deadline = receivedAt.set({
-        hour: 10,
-        minute: 0,
-        second: 0,
-        millisecond: 0,
-      });
-
-      if (isAfterOfficeHours || isWeekend) {
-        // Advance to next day
-        deadline = deadline.plus({ days: 1 });
-      }
-
-      // If the deadline falls on a weekend, advance to Monday
-      while (deadline.weekday === 6 || deadline.weekday === 7) {
-        deadline = deadline.plus({ days: 1 });
-      }
-    } else {
-      // During office hours -> strict 2 hours later alarm
-      deadline = receivedAt.plus({ hours: 2 });
-    }
-
-    return deadline;
+    // strict 2 hours later alarm even outside office hours
+    return receivedAt.plus({ hours: 2 });
   }
 
   @OnEvent('message.received')
@@ -361,7 +332,13 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
       if (now >= deadline) {
         this.logger.warn(`SLA breached for ${jid} (${msg.senderName})!`);
 
-        await this.sendTelegramAlert(msg);
+        const isWeekend = now.weekday === 6 || now.weekday === 7;
+        const isBeforeOfficeHours = now.hour < 9;
+        const isAfterOfficeHours = now.hour >= 18;
+        const isOutsideWorkingHours =
+          isWeekend || isBeforeOfficeHours || isAfterOfficeHours;
+
+        await this.sendTelegramAlert(msg, isOutsideWorkingHours);
 
         msg.notified = true;
         try {
@@ -373,7 +350,10 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async sendTelegramAlert(msg: PendingMessage) {
+  private async sendTelegramAlert(
+    msg: PendingMessage,
+    isOutsideWorkingHours: boolean = false,
+  ) {
     if (!this.bot) return;
 
     const allHrPhones = Array.from(this.hrRecords.keys());
@@ -423,7 +403,11 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     // If chatName is available, we could include it, but the original text didn't have it.
     // Let's add it dynamically if it exists.
     const groupContext = msg.chatName ? ` in *${msg.chatName}*` : '';
-    const text = `👋 Hello there! Just a friendly reminder that *${msg.senderName}*${groupContext} has been waiting for a reply for a while. Let's make sure to get back to them soon! 🚀`;
+    let text = `👋 Hello there! Just a friendly reminder that *${msg.senderName}*${groupContext} has been waiting for a reply for a while. Let's make sure to get back to them soon! 🚀`;
+
+    if (isOutsideWorkingHours) {
+      text += `\n\n_Note: It is currently outside working hours. Please reply tomorrow during working hours._`;
+    }
 
     try {
       for (const hrChatId of targetedHrChatIds) {
