@@ -326,8 +326,6 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     const now = DateTime.now().setZone(tz);
 
     for (const [jid, msg] of this.pendingMessages.entries()) {
-      if (msg.notified) continue;
-
       const deadline = DateTime.fromISO(msg.deadlineISO, { zone: tz });
       if (now >= deadline) {
         this.logger.warn(`SLA breached for ${jid} (${msg.senderName})!`);
@@ -340,11 +338,18 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
 
         await this.sendTelegramAlert(msg, isOutsideWorkingHours);
 
-        msg.notified = true;
+        // Update the deadline for the next alert instead of marking as permanently notified
+        const nextDeadline = this.calculateDeadline(now);
+        msg.deadlineISO = nextDeadline.toISO() as string;
+        msg.notified = false;
+
         try {
-          await this.d1Service.markAsNotified(jid);
+          await this.d1Service.insertPendingMessage(msg);
         } catch (e) {
-          this.logger.error('Failed to update notified status in D1', e);
+          this.logger.error(
+            'Failed to update pending message deadline in D1',
+            e,
+          );
         }
       }
     }
