@@ -131,7 +131,25 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       const phone = parts[1].replace(/\D/g, '');
-      const chatId = parts[2] ? parts[2].trim() : String(ctx.chat.id);
+
+      let chatId = parts[2] ? parts[2].trim() : '';
+      if (!chatId) {
+        if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
+          if (!ctx.from) {
+            await ctx.reply(
+              'Could not determine your user ID. Please provide it explicitly.',
+            );
+            return;
+          }
+          chatId = String(ctx.from.id);
+          await ctx.reply(
+            `Detected group chat. Using your personal user ID (${chatId}) instead of the group ID.\n\n*Important:* Make sure you have sent at least one private message to me, otherwise I won't be able to send you SLA alerts!`,
+            { parse_mode: 'Markdown' },
+          );
+        } else {
+          chatId = String(ctx.chat.id);
+        }
+      }
 
       if (!this.hrRecords.has(phone)) {
         await ctx.reply(
