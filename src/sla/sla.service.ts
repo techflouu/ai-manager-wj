@@ -477,7 +477,7 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  @Cron('0 17 * * *')
+  @Cron('0 17 * * *', { timeZone: process.env.TIMEZONE || 'Asia/Singapore' })
   async dailyGroupReport() {
     const groupChatId = this.configService.get<string>(
       'TELEGRAM_GROUP_CHAT_ID',
