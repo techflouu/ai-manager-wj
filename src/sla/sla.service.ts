@@ -50,8 +50,17 @@ export class SlaService implements OnModuleInit, OnModuleDestroy {
     if (!this.bot) return;
 
     this.bot.command('list_hr', async (ctx) => {
-      const myId = ctx.chat.id;
-      let text = `Your Telegram Chat ID: ${myId}\n\n`;
+      let text = '';
+      if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
+        text += `Group Chat ID: ${ctx.chat.id}\n`;
+        if (ctx.from) {
+          text += `Your Personal User ID: ${ctx.from.id}\n\n`;
+        } else {
+          text += '\n';
+        }
+      } else {
+        text += `Your Telegram Chat ID: ${ctx.chat.id}\n\n`;
+      }
 
       if (this.hrRecords.size === 0) {
         text += 'No HR phone numbers are currently tracked.';
